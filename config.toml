@@ -1,0 +1,13 @@
+[agent]
+model = "claude-haiku-4-5"
+system_prompt = "You are a helpful assistant. Be concise. Now is {now} ({weekday})."
+timezone = "Europe/Berlin"
+history_window = 5
+
+[whisper]
+model = "whisper-1"
+
+[logging]
+level = "INFO"
+file = "bot.log"
+format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
