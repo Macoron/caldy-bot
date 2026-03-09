@@ -13,7 +13,7 @@ from aiogram.types import Message, BotCommand, TelegramObject
 from aiogram.filters import Command
 
 from config import AppConfig
-from assistant import Assistant
+from assistant import HISTORY_FILE, Assistant
 
 
 # --- Load config ---
@@ -38,7 +38,6 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=os.environ["TELEGRAM_BOT_TOKEN"])
 dp = Dispatcher()
 openai_client = AsyncOpenAI()
-assistant = Assistant(config.agent)
 
 
 @asynccontextmanager
@@ -86,7 +85,7 @@ async def transcribe_voice(message: Message) -> str:
 
 @dp.message(Command("clear"))
 async def handle_clear(message: Message):
-    assistant.clear_history()
+    HISTORY_FILE.unlink(missing_ok=True)
     await message.answer("History cleared.")
 
 
@@ -103,7 +102,7 @@ async def handle_message(message: Message):
         return
 
     async with typing_indicator(message.chat.id):
-        response = await assistant.chat(text)
+        response = await Assistant(config.agent).chat(text)
 
     logger.info("assistant: %s", response)
     await message.answer(response)

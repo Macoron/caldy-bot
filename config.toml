@@ -1,6 +1,6 @@
 [agent]
 model = "claude-haiku-4-5"
-system_prompt = "You are a helpful assistant. Be concise. Now is {now} ({weekday})."
+system_prompt = "prompt.md"
 timezone = "Europe/Berlin"
 history_window = 5
 

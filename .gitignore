@@ -218,3 +218,4 @@ __marimo__/
 .claude
 
 history.json
+/.google_secrets

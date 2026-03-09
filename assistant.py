@@ -11,9 +11,11 @@ from pydantic_ai.messages import (
     ModelResponse,
     UserPromptPart,
     TextPart,
+    SystemPromptPart,
 )
 
 from config import AgentConfig
+import google_calendar
 
 logger = logging.getLogger(__name__)
 
@@ -56,20 +58,17 @@ def _compress_history(messages: list) -> list:
 class Assistant:
     def __init__(self, config: AgentConfig):
         self._config = config
+        self._system_prompt = self._render_prompt(config.system_prompt)
         self._history: list = self._load_history()
 
         logger.info("Initializing agent | model=%s", config.model)
-
+        logger.info("System prompt: %s", self._system_prompt)
         self._agent = Agent(config.model)
         self._register_tools()
 
-        @self._agent.system_prompt
-        def dynamic_system_prompt() -> str:
-            prompt = self._render_prompt(self._config.system_prompt)
-            logger.info("System prompt: %s", prompt)
-            return prompt
-
     def _render_prompt(self, template: str) -> str:
+        if template.endswith(".md"):
+            template = Path(template).read_text()
         tz = ZoneInfo(self._config.timezone)
         now = datetime.now(tz)
         return template.format(
@@ -78,24 +77,16 @@ class Assistant:
         )
 
     def _register_tools(self):
-        @self._agent.tool_plain
-        def list_folder(path: str) -> str:
-            """List contents of a folder. Returns file and directory names."""
-            import os
-            target = Path(path).expanduser().resolve()
-            logger.info("Tool called: list_folder → %s", target)
-            if not target.is_dir():
-                return f"Not a directory: {target}"
-            entries = sorted(os.listdir(target))
-            return "\n".join(entries) if entries else "(empty)"
+        google_calendar.register_tools(self._agent, self._config.timezone)
 
     def _load_history(self) -> list:
+        system_msg = ModelRequest(parts=[SystemPromptPart(content=self._system_prompt)])
         if HISTORY_FILE.exists():
             data = json.loads(HISTORY_FILE.read_text())
             history = ModelMessagesTypeAdapter.validate_python(data)
             logger.info("Loaded %d messages from history", len(history))
-            return history
-        return []
+            return [system_msg] + history
+        return [system_msg]
 
     def _save_history(self):
         compressed = _compress_history(self._history)
@@ -107,9 +98,6 @@ class Assistant:
         result = await self._agent.run(text, message_history=self._history)
         self._history = result.all_messages()
         self._save_history()
+        usage = result.usage()
+        logger.info("Tokens: input=%d output=%d total=%d", usage.input_tokens, usage.output_tokens, usage.total_tokens)
         return result.output
-
-    def clear_history(self):
-        self._history = []
-        HISTORY_FILE.unlink(missing_ok=True)
-        logger.info("History cleared")

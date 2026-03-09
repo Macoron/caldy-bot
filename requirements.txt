@@ -2,3 +2,5 @@ pydantic-ai
 aiogram
 openai
 python-dotenv
+google-api-python-client
+google-auth-oauthlib
