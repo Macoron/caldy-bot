@@ -101,8 +101,11 @@ async def handle_message(message: Message):
     else:
         return
 
+    async def notify(text: str):
+        await bot.send_message(chat_id=message.chat.id, text=text)
+
     async with typing_indicator(message.chat.id):
-        response = await Assistant(config.agent).chat(text)
+        response = await Assistant(config.agent, notify=notify).chat(text)
 
     logger.info("assistant: %s", response)
     await message.answer(response)

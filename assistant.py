@@ -56,8 +56,9 @@ def _compress_history(messages: list) -> list:
 
 
 class Assistant:
-    def __init__(self, config: AgentConfig):
+    def __init__(self, config: AgentConfig, notify=None):
         self._config = config
+        self._notify = notify
         self._system_prompt = self._render_prompt(config.system_prompt)
         self._history: list = self._load_history()
 
@@ -77,7 +78,7 @@ class Assistant:
         )
 
     def _register_tools(self):
-        google_calendar.register_tools(self._agent, self._config.timezone)
+        google_calendar.register_tools(self._agent, self._config.timezone, self._notify)
 
     def _load_history(self) -> list:
         system_msg = ModelRequest(parts=[SystemPromptPart(content=self._system_prompt)])

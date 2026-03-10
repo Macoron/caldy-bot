@@ -1,14 +1,33 @@
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
+from typing import Optional
 from pathlib import Path
 
+from pydantic import BaseModel
+from pydantic_ai import ModelRetry
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 logger = logging.getLogger(__name__)
+
+
+class CalendarEvent(BaseModel):
+    id: str
+    summary: str
+    start: str
+    end: str
+    location: Optional[str] = None
+    description: Optional[str] = None
+
+
+class CalendarEventResult(BaseModel):
+    id: str
+    summary: str
+    link: str
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 CREDENTIALS_FILE = Path(".google_secrets/credentials.json")
@@ -31,81 +50,112 @@ def get_service():
             flow.fetch_token(code=code)
             creds = flow.credentials
         TOKEN_FILE.write_text(creds.to_json())
-    return build("calendar", "v3", credentials=creds)
+    return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
 
-def register_tools(agent, tz: str):
+def register_tools(agent, tz: str, notify=None):
     calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
+    loop = asyncio.get_event_loop()
 
-    @agent.tool_plain
-    def list_upcoming_events(max_results: int = 10) -> str:
-        """List upcoming events from Google Calendar."""
-        logger.info("Tool called: list_upcoming_events")
-        service = get_service()
-        now = datetime.now(timezone.utc).isoformat()
-        result = service.events().list(
-            calendarId=calendar_id,
-            timeMin=now,
-            maxResults=max_results,
-            singleEvents=True,
-            orderBy="startTime",
-        ).execute()
-        events = result.get("items", [])
-        if not events:
-            return "No upcoming events."
-        lines = []
-        for e in events:
-            start = e["start"].get("dateTime", e["start"].get("date"))
-            lines.append(f"{start}: {e.get('summary', '(no title)')}")
-        return "\n".join(lines)
+    def fire(msg: str):
+        if notify:
+            asyncio.run_coroutine_threadsafe(notify(msg), loop)
 
     @agent.tool_plain
     def create_calendar_event(
         summary: str,
-        start_datetime: str,
-        end_datetime: str,
+        start: datetime,
+        end: datetime,
         description: str = "",
-    ) -> str:
-        """Create a Google Calendar event.
-        start_datetime and end_datetime must be ISO 8601 format, e.g. '2024-03-15T14:00:00+01:00'.
-        """
+        location: str = "",
+    ) -> CalendarEventResult:
+        """Create a Google Calendar event."""
         logger.info("Tool called: create_calendar_event → %s", summary)
-        service = get_service()
-        event = {
+        try:
+            service = get_service()
+            created = service.events().insert(calendarId=calendar_id, body={
             "summary": summary,
             "description": description,
-            "start": {"dateTime": start_datetime, "timeZone": tz},
-            "end": {"dateTime": end_datetime, "timeZone": tz},
-        }
-        created = service.events().insert(calendarId=calendar_id, body=event).execute()
-        return f"Event created: {created.get('htmlLink')}"
+            "location": location,
+            "start": {"dateTime": start.isoformat(), "timeZone": tz},
+            "end": {"dateTime": end.isoformat(), "timeZone": tz},
+        }).execute()
+            fire(f"✅ Event created: {summary}")
+            return CalendarEventResult(id=created["id"], summary=created["summary"], link=created["htmlLink"])
+        except Exception as e:
+            logger.error("create_calendar_event failed: %s", e)
+            raise ModelRetry(str(e))
+
+    @agent.tool_plain
+    def list_upcoming_events(max_results: int = 10) -> list[CalendarEvent]:
+        """List upcoming events from Google Calendar. Returns event IDs which are required for update and delete operations."""
+        logger.info("Tool called: list_upcoming_events")
+        try:
+            service = get_service()
+            now = datetime.now(timezone.utc).isoformat()
+            result = service.events().list(
+                calendarId=calendar_id,
+                timeMin=now,
+                maxResults=max_results,
+                singleEvents=True,
+                orderBy="startTime",
+            ).execute()
+            events = result.get("items", [])
+            return [
+                CalendarEvent(
+                    id=e["id"],
+                    summary=e.get("summary", "(no title)"),
+                    start=e["start"].get("dateTime", e["start"].get("date")),
+                    end=e["end"].get("dateTime", e["end"].get("date")),
+                    location=e.get("location"),
+                    description=e.get("description"),
+                )
+                for e in events
+            ]
+        except Exception as e:
+            logger.error("list_upcoming_events failed: %s", e)
+            raise ModelRetry(str(e))
+
+
+    @agent.tool_plain
+    def update_calendar_event(
+        event_id: str,
+        summary: Optional[str] = None,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        description: Optional[str] = None,
+        location: Optional[str] = None,
+    ) -> CalendarEventResult:
+        """Update fields of an existing Google Calendar event. Only provided fields are updated."""
+        logger.info("Tool called: update_calendar_event → %s", event_id)
+        try:
+            service = get_service()
+            event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+            event.update({k: v for k, v in {
+                "summary": summary,
+                "description": description,
+                "location": location,
+                "start": {"dateTime": start.isoformat(), "timeZone": tz} if start else None,
+                "end": {"dateTime": end.isoformat(), "timeZone": tz} if end else None,
+            }.items() if v is not None})
+            updated = service.events().update(calendarId=calendar_id, eventId=event_id, body=event).execute()
+            fire(f"✏️ Event updated: {updated.get('summary')}")
+            return CalendarEventResult(id=updated["id"], summary=updated["summary"], link=updated["htmlLink"])
+        except Exception as e:
+            logger.error("update_calendar_event failed: %s", e)
+            raise ModelRetry(str(e))
 
     @agent.tool_plain
     def delete_calendar_event(event_id: str) -> str:
         """Delete a Google Calendar event by its ID."""
         logger.info("Tool called: delete_calendar_event → %s", event_id)
-        service = get_service()
-        service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
-        return f"Event {event_id} deleted."
-
-    @agent.tool_plain
-    def list_upcoming_events_with_ids(max_results: int = 10) -> str:
-        """List upcoming events with their IDs (needed for deletion)."""
-        logger.info("Tool called: list_upcoming_events_with_ids")
-        service = get_service()
-        now = datetime.now(timezone.utc).isoformat()
-        result = service.events().list(
-            calendarId=calendar_id,
-            timeMin=now,
-            maxResults=max_results,
-            singleEvents=True,
-            orderBy="startTime",
-        ).execute()
-        events = result.get("items", [])
-        if not events:
-            return "No upcoming events."
-        lines = []
-        for e in events:
-            start = e["start"].get("dateTime", e["start"].get("date"))
-            lines.append(f"[{e['id']}] {start}: {e.get('summary', '(no title)')}")
-        return "\n".join(lines)
+        try:
+            service = get_service()
+            event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+            summary = event.get("summary", event_id)
+            service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+            fire(f"🗑 Event deleted: {summary}")
+            return f"Event '{summary}' deleted."
+        except Exception as e:
+            logger.error("delete_calendar_event failed: %s", e)
+            raise ModelRetry(str(e))
