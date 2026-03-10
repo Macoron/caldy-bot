@@ -2,7 +2,7 @@
 model = "claude-haiku-4-5"
 system_prompt = "prompt.md"
 timezone = "Europe/Berlin"
-history_window = 5
+history_window = 20
 
 [whisper]
 model = "whisper-1"

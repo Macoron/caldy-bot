@@ -6,6 +6,7 @@ class AgentConfig(BaseModel):
     system_prompt: str
     timezone: str
     history_window: int = 5
+    compress_history: bool = False
 
 
 class WhisperConfig(BaseModel):

@@ -90,8 +90,8 @@ class Assistant:
         return [system_msg]
 
     def _save_history(self):
-        compressed = _compress_history(self._history)
-        trimmed = compressed[-(self._config.history_window * 2):]
+        messages = _compress_history(self._history) if self._config.compress_history else self._history
+        trimmed = messages[-self._config.history_window:]
         data = ModelMessagesTypeAdapter.dump_python(trimmed, mode="json")
         HISTORY_FILE.write_text(json.dumps(data, indent=2))
 
@@ -100,5 +100,8 @@ class Assistant:
         self._history = result.all_messages()
         self._save_history()
         usage = result.usage()
-        logger.info("Tokens: input=%d output=%d total=%d", usage.input_tokens, usage.output_tokens, usage.total_tokens)
+        logger.info(
+            "Tokens: input=%d output=%d total=%d",
+            usage.input_tokens, usage.output_tokens, usage.total_tokens
+        )
         return result.output
