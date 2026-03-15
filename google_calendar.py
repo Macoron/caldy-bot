@@ -293,7 +293,9 @@ async def reminder_loop(bot, chat_id: int, calendar_id: str, tz, config):
 
             for event in events:
                 event_id = event["id"]
-                start_str = event["start"].get("dateTime") or event["start"].get("date")
+                if "dateTime" not in event["start"]:
+                    continue  # skip all-day events — no specific start time
+                start_str = event["start"]["dateTime"]
                 prev = notified.get(event_id)
                 if prev and prev["start"] == start_str:
                     continue
