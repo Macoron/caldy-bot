@@ -1,0 +1,13 @@
+[Unit]
+Description=Caldy Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/caldy-bot
+ExecStart=/root/caldy-bot/.venv/bin/python3 telegram_bot.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
