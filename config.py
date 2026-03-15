@@ -24,14 +24,20 @@ class LoggingConfig(BaseModel):
 
 class RemindersConfig(BaseModel):
     poll_interval_minutes: int
-    reminder_minutes: int 
+    reminder_minutes: int
     notified_file: str
+
+
+class AgendaConfig(BaseModel):
+    enabled: bool
+    send_time: str  # "HH:MM" in agent.timezone
 
 
 class AppConfig(BaseModel):
     agent: AgentConfig
     whisper: WhisperConfig
     reminders: RemindersConfig
+    agenda: AgendaConfig
     logging: LoggingConfig
 
     @property

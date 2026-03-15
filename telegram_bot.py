@@ -14,6 +14,7 @@ from aiogram.filters import Command
 from config import config
 from assistant import HISTORY_FILE, Assistant
 from google_calendar import reminder_loop
+from daily_agenda import agenda_loop
 
 
 # --- Load config ---
@@ -112,10 +113,15 @@ async def main():
     await bot.set_my_commands([
         BotCommand(command="clear", description="Clear conversation history"),
     ])
+    chat_id = int(os.environ["TELEGRAM_ALLOWED_CHAT_ID"])
     asyncio.create_task(
-        reminder_loop(bot, int(os.environ["TELEGRAM_ALLOWED_CHAT_ID"]),
+        reminder_loop(bot, chat_id,
                       os.environ["GOOGLE_CALENDAR_ID"], config.tz, config.reminders)
     )
+    if config.agenda.enabled:
+        asyncio.create_task(
+            agenda_loop(bot, chat_id, config.agent, config.tz, config.agenda)
+        )
     logger.info("Bot started")
     await dp.start_polling(bot)
 

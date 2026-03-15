@@ -13,6 +13,10 @@ poll_interval_minutes = 15
 reminder_minutes = 15
 notified_file = "notified_events.json"
 
+[agenda]
+enabled = true
+send_time = "20:21"
+
 [logging]
 level = "INFO"
 file = "bot.log"

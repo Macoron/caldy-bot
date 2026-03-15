@@ -64,7 +64,6 @@ class Assistant:
         self._history: list = self._load_history()
 
         logger.info("Initializing agent | model=%s", config.model)
-        logger.info("System prompt: %s", self._system_prompt)
         self._agent = Agent(config.model)
         self._register_tools()
 
