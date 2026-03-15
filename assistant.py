@@ -16,6 +16,7 @@ from pydantic_ai.messages import (
 
 from config import AgentConfig
 import google_calendar
+import todoist
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ class Assistant:
 
     def _register_tools(self):
         google_calendar.register_tools(self._agent, self._config.timezone, self._notify)
+        todoist.register_tools(self._agent, self._config.timezone, self._notify)
 
     def _load_history(self) -> list:
         system_msg = ModelRequest(parts=[SystemPromptPart(content=self._system_prompt)])
