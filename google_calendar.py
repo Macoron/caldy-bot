@@ -52,6 +52,7 @@ class CalendarEvent(BaseModel):
     end: str
     location: Optional[str] = None
     description: Optional[str] = None
+    recurrence: Optional[list[str]] = None
 
 
 class CalendarEventResult(BaseModel):
@@ -149,20 +150,23 @@ def register_tools(agent, tz: str, notify=None):
             raise ModelRetry(str(e))
 
     @agent.tool_plain
-    def list_upcoming_events(max_results: int = 10) -> list[CalendarEvent]:
-        """List upcoming events from Google Calendar. Returns event IDs which are required for update and delete operations."""
-        logger.info("Tool called: list_upcoming_events")
+    def list_upcoming_events(days_ahead: int = 7) -> list[CalendarEvent]:
+        """List upcoming events from Google Calendar. Returns event IDs which are required for update and delete operations.
+        Recurring events appear once with their recurrence rule (e.g. 'RRULE:FREQ=WEEKLY;BYDAY=MO').
+        Use days_ahead to control the time window: 1 for today, 2 for today+tomorrow, 7 for this week, etc."""
+        logger.info("Tool called: list_upcoming_events | days_ahead=%d", days_ahead)
         try:
             service = get_service()
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(timezone.utc)
+            window_end = now + timedelta(days=days_ahead)
             result = service.events().list(
                 calendarId=calendar_id,
-                timeMin=now,
-                maxResults=max_results,
-                singleEvents=True,
-                orderBy="startTime",
+                timeMin=now.isoformat(),
+                timeMax=window_end.isoformat(),
+                singleEvents=False,
             ).execute()
             events = result.get("items", [])
+            events.sort(key=lambda e: e["start"].get("dateTime", e["start"].get("date", "")))
             return [
                 CalendarEvent(
                     id=e["id"],
@@ -171,6 +175,7 @@ def register_tools(agent, tz: str, notify=None):
                     end=e["end"].get("dateTime", e["end"].get("date")),
                     location=e.get("location"),
                     description=e.get("description"),
+                    recurrence=e.get("recurrence"),
                 )
                 for e in events
             ]
