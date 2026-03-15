@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone, date, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 from pathlib import Path
 
@@ -12,34 +12,9 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+from utils import _friendly_dt, _friendly_rrule, _friendly_event_time
+
 logger = logging.getLogger(__name__)
-
-
-def _friendly_date(d: date) -> str:
-    today = date.today()
-    if d == today:
-        return "today"
-    elif d == today + timedelta(days=1):
-        return "tomorrow"
-    elif today < d <= today + timedelta(days=6):
-        return "this " + d.strftime("%A")
-    elif today + timedelta(days=6) < d <= today + timedelta(days=13):
-        return "next " + d.strftime("%A")
-    elif d.year == today.year:
-        return d.strftime("%B %-d")
-    else:
-        return d.strftime("%B %-d, %Y")
-
-
-def _friendly_dt(dt: datetime) -> str:
-    return f"{_friendly_date(dt.date())} at {dt.strftime('%H:%M')}"
-
-
-def _friendly_event_time(dt_dict: dict) -> str:
-    """Parse a Calendar API start/end dict and return a friendly label."""
-    if "dateTime" in dt_dict:
-        return _friendly_dt(datetime.fromisoformat(dt_dict["dateTime"]))
-    return _friendly_date(date.fromisoformat(dt_dict["date"]))
 
 
 class CalendarEvent(BaseModel):
@@ -95,22 +70,36 @@ def register_tools(agent, tz: str, notify=None):
         end: datetime,
         description: str = "",
         location: str = "",
+        recurrence: Optional[list[str]] = None,
     ) -> CalendarEventResult:
-        """Create a Google Calendar event."""
+        """Create a Google Calendar event.
+
+        For recurring events, pass recurrence as a list of RFC 5545 RRULE strings, e.g.:
+          - Every day: ["RRULE:FREQ=DAILY"]
+          - Every weekday: ["RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"]
+          - Every Monday for 4 weeks: ["RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=4"]
+          - Every month on the 1st: ["RRULE:FREQ=MONTHLY;BYMONTHDAY=1"]
+          - Every year until a date: ["RRULE:FREQ=YEARLY;UNTIL=20271231T000000Z"]
+        """
         logger.info(
-            "Tool called: create_calendar_event → %s | starts %s, ends %s",
+            "Tool called: create_calendar_event → %s | starts %s, ends %s%s",
             summary, _friendly_dt(start), _friendly_dt(end),
+            f" | recurrence: {recurrence}" if recurrence else "",
         )
         try:
             service = get_service()
-            created = service.events().insert(calendarId=calendar_id, body={
-            "summary": summary,
-            "description": description,
-            "location": location,
-            "start": {"dateTime": start.isoformat(), "timeZone": tz},
-            "end": {"dateTime": end.isoformat(), "timeZone": tz},
-        }).execute()
-            fire(f"✅ Event created: {summary} ({_friendly_dt(start)} – {_friendly_dt(end)})")
+            body = {
+                "summary": summary,
+                "description": description,
+                "location": location,
+                "start": {"dateTime": start.isoformat(), "timeZone": tz},
+                "end": {"dateTime": end.isoformat(), "timeZone": tz},
+            }
+            if recurrence:
+                body["recurrence"] = recurrence
+            created = service.events().insert(calendarId=calendar_id, body=body).execute()
+            recurrence_str = f", {_friendly_rrule(recurrence)}" if recurrence else ""
+            fire(f"✅ Event created: {summary} ({_friendly_dt(start)} – {_friendly_dt(end)}{recurrence_str})")
             return CalendarEventResult(id=created["id"], summary=created["summary"], link=created["htmlLink"])
         except Exception as e:
             logger.error("create_calendar_event failed: %s", e)
@@ -155,8 +144,13 @@ def register_tools(agent, tz: str, notify=None):
         end: Optional[datetime] = None,
         description: Optional[str] = None,
         location: Optional[str] = None,
+        recurrence: Optional[list[str]] = None,
     ) -> CalendarEventResult:
-        """Update fields of an existing Google Calendar event. Only provided fields are updated."""
+        """Update fields of an existing Google Calendar event. Only provided fields are updated.
+
+        To change or add recurrence, pass recurrence as a list of RFC 5545 RRULE strings (same
+        format as create_calendar_event). To remove recurrence, pass recurrence=[].
+        """
         logger.info("Tool called: update_calendar_event → %s", event_id)
         try:
             service = get_service()
@@ -168,11 +162,14 @@ def register_tools(agent, tz: str, notify=None):
                 "start": {"dateTime": start.isoformat(), "timeZone": tz} if start else None,
                 "end": {"dateTime": end.isoformat(), "timeZone": tz} if end else None,
             }.items() if v is not None})
+            if recurrence is not None:
+                event["recurrence"] = recurrence
             updated = service.events().update(calendarId=calendar_id, eventId=event_id, body=event).execute()
             start_str = _friendly_event_time(updated["start"])
             end_str = _friendly_event_time(updated["end"])
-            logger.info("update_calendar_event result → %s | starts %s, ends %s", updated.get("summary"), start_str, end_str)
-            fire(f"✏️ Event updated: {updated.get('summary')} ({start_str} – {end_str})")
+            recurrence_str = f", {_friendly_rrule(updated['recurrence'])}" if updated.get("recurrence") else ""
+            logger.info("update_calendar_event result → %s | starts %s, ends %s%s", updated.get("summary"), start_str, end_str, recurrence_str)
+            fire(f"✏️ Event updated: {updated.get('summary')} ({start_str} – {end_str}{recurrence_str})")
             return CalendarEventResult(id=updated["id"], summary=updated["summary"], link=updated["htmlLink"])
         except Exception as e:
             logger.error("update_calendar_event failed: %s", e)
