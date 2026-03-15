@@ -100,13 +100,13 @@ async def handle_message(message: Message):
         return
 
     async def notify(text: str):
-        await bot.send_message(chat_id=message.chat.id, text=text)
+        await bot.send_message(chat_id=message.chat.id, text=text, parse_mode="Markdown")
 
     async with typing_indicator(message.chat.id):
         response = await Assistant(config.agent, notify=notify).chat(text)
 
     logger.info("assistant: %s", response)
-    await message.answer(response)
+    await message.answer(response, parse_mode="Markdown")
 
 
 async def main():

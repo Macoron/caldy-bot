@@ -24,12 +24,12 @@ async def agenda_loop(bot, chat_id, agent_config, tz, agenda_config):
 
         try:
             async def notify(text):
-                await bot.send_message(chat_id=chat_id, text=text)
+                await bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
 
             response = await Assistant(agent_config, notify=notify).chat(
                 "What's my agenda for today?"
             )
-            await bot.send_message(chat_id, response)
+            await bot.send_message(chat_id, response, parse_mode="Markdown")
             logger.info("Daily agenda sent")
         except Exception:
             logger.exception("Error sending daily agenda")
