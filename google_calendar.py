@@ -17,6 +17,32 @@ from utils import _friendly_dt, _friendly_rrule, _friendly_event_time
 logger = logging.getLogger(__name__)
 
 
+class CalendarConflictError(Exception):
+    def __init__(self, conflicts: list[str]):
+        self.conflicts = conflicts
+        super().__init__("Conflicts: " + ", ".join(conflicts))
+
+
+def _check_conflicts(service, calendar_id: str, start: datetime, end: datetime,
+                     ignore: bool, exclude_event_id: str | None = None):
+    if ignore:
+        return
+    result = service.events().list(
+        calendarId=calendar_id,
+        timeMin=start.isoformat(),
+        timeMax=end.isoformat(),
+        singleEvents=True,
+        orderBy="startTime",
+    ).execute()
+    conflicts = [
+        f"{e.get('summary', '(no title)')} ({_friendly_event_time(e['start'])} – {_friendly_event_time(e['end'])})"
+        for e in result.get("items", [])
+        if e["id"] != exclude_event_id
+    ]
+    if conflicts:
+        raise CalendarConflictError(conflicts)
+
+
 class CalendarEvent(BaseModel):
     id: str
     summary: str
@@ -71,6 +97,7 @@ def register_tools(agent, tz: str, notify=None):
         description: str = "",
         location: str = "",
         recurrence: Optional[list[str]] = None,
+        ignore_conflicts: bool = False,
     ) -> CalendarEventResult:
         """Create a Google Calendar event.
 
@@ -80,6 +107,9 @@ def register_tools(agent, tz: str, notify=None):
           - Every Monday for 4 weeks: ["RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=4"]
           - Every month on the 1st: ["RRULE:FREQ=MONTHLY;BYMONTHDAY=1"]
           - Every year until a date: ["RRULE:FREQ=YEARLY;UNTIL=20271231T000000Z"]
+
+        Set ignore_conflicts=True only when the user has explicitly acknowledged the conflict and
+        wants to create the event anyway.
         """
         logger.info(
             "Tool called: create_calendar_event → %s | starts %s, ends %s%s",
@@ -88,6 +118,7 @@ def register_tools(agent, tz: str, notify=None):
         )
         try:
             service = get_service()
+            _check_conflicts(service, calendar_id, start, end, ignore=ignore_conflicts)
             body = {
                 "summary": summary,
                 "description": description,
@@ -145,16 +176,22 @@ def register_tools(agent, tz: str, notify=None):
         description: Optional[str] = None,
         location: Optional[str] = None,
         recurrence: Optional[list[str]] = None,
+        ignore_conflicts: bool = False,
     ) -> CalendarEventResult:
         """Update fields of an existing Google Calendar event. Only provided fields are updated.
 
         To change or add recurrence, pass recurrence as a list of RFC 5545 RRULE strings (same
         format as create_calendar_event). To remove recurrence, pass recurrence=[].
+
+        Set ignore_conflicts=True only when the user has explicitly acknowledged the conflict and
+        wants to reschedule anyway.
         """
         logger.info("Tool called: update_calendar_event → %s", event_id)
         try:
             service = get_service()
             event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+            if start and end:
+                _check_conflicts(service, calendar_id, start, end, ignore=ignore_conflicts, exclude_event_id=event_id)
             event.update({k: v for k, v in {
                 "summary": summary,
                 "description": description,
