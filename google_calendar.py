@@ -270,7 +270,6 @@ def _prune_notified(notified: dict) -> dict:
 async def reminder_loop(bot, chat_id: int, calendar_id: str, tz, config):
     notified_path = Path(config.notified_file)
     notified = _load_notified(notified_path)
-    service = get_service()
 
     logger.info("Reminder loop started | calendar=%s, poll=%dmin, remind=%dmin ahead",
                 calendar_id, config.poll_interval_minutes, config.reminder_minutes)
@@ -280,6 +279,7 @@ async def reminder_loop(bot, chat_id: int, calendar_id: str, tz, config):
             now = datetime.now(timezone.utc)
             window_end = now + timedelta(minutes=config.reminder_minutes)
 
+            service = get_service()
             events = service.events().list(
                 calendarId=calendar_id,
                 timeMin=now.isoformat(),
