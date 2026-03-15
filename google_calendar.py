@@ -288,7 +288,7 @@ async def reminder_loop(bot, chat_id: int, calendar_id: str, tz, config):
                 orderBy="startTime",
             ).execute().get("items", [])
 
-            logger.log("Reminder poll: %d events in next %d min, %d already notified",
+            logger.info("Reminder poll: %d events in next %d min, %d already notified",
                          len(events), config.reminder_minutes, len(notified))
 
             for event in events:
