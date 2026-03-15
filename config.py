@@ -5,8 +5,8 @@ class AgentConfig(BaseModel):
     model: str
     system_prompt: str
     timezone: str
-    history_window: int = 5
-    compress_history: bool = False
+    history_window: int = 5  # number of user exchanges to keep (each exchange may include tool calls)
+    compress_history: bool = False  # if True, strips intermediate tool calls before saving
 
 
 class WhisperConfig(BaseModel):

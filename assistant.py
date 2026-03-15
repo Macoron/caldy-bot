@@ -91,8 +91,15 @@ class Assistant:
 
     def _save_history(self):
         messages = _compress_history(self._history) if self._config.compress_history else self._history
-        trimmed = messages[-self._config.history_window:]
-        data = ModelMessagesTypeAdapter.dump_python(trimmed, mode="json")
+        # Trim at user turn boundaries to avoid splitting tool_use/tool_result pairs,
+        # which would cause an API error. history_window = N means "keep last N user exchanges".
+        user_turns = [
+            i for i, m in enumerate(messages)
+            if isinstance(m, ModelRequest) and any(isinstance(p, UserPromptPart) for p in m.parts)
+        ]
+        if len(user_turns) > self._config.history_window:
+            messages = messages[user_turns[-self._config.history_window]:]
+        data = ModelMessagesTypeAdapter.dump_python(messages, mode="json")
         HISTORY_FILE.write_text(json.dumps(data, indent=2))
 
     async def chat(self, text: str) -> str:
