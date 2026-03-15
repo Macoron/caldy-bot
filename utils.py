@@ -1,8 +1,9 @@
 from datetime import datetime, date, timedelta
+from config import config
 
 
 def _friendly_date(d: date) -> str:
-    today = date.today()
+    today = datetime.now(config.tz).date()
     if d == today:
         return "today"
     elif d == today + timedelta(days=1):
@@ -18,6 +19,7 @@ def _friendly_date(d: date) -> str:
 
 
 def _friendly_dt(dt: datetime) -> str:
+    dt = dt.astimezone(config.tz)
     return f"{_friendly_date(dt.date())} at {dt.strftime('%H:%M')}"
 
 

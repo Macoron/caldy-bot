@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import tempfile
-import tomllib
 from contextlib import asynccontextmanager
 from typing import Callable, Awaitable, Any
 
@@ -12,16 +11,14 @@ from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.types import Message, BotCommand, TelegramObject
 from aiogram.filters import Command
 
-from config import AppConfig
+from config import config
 from assistant import HISTORY_FILE, Assistant
+from google_calendar import reminder_loop
 
 
 # --- Load config ---
 
 load_dotenv()
-
-with open("config.toml", "rb") as f:
-    config = AppConfig.model_validate(tomllib.load(f))
 
 logging.basicConfig(
     level=getattr(logging, config.logging.level),
@@ -115,6 +112,10 @@ async def main():
     await bot.set_my_commands([
         BotCommand(command="clear", description="Clear conversation history"),
     ])
+    asyncio.create_task(
+        reminder_loop(bot, int(os.environ["TELEGRAM_ALLOWED_CHAT_ID"]),
+                      os.environ["GOOGLE_CALENDAR_ID"], config.tz, config.reminders)
+    )
     logger.info("Bot started")
     await dp.start_polling(bot)
 

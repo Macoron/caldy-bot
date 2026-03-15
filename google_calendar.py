@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from typing import Optional
 from pathlib import Path
 
@@ -81,8 +83,16 @@ def get_service():
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
 
+def _ensure_tz(dt: Optional[datetime], tz_info) -> Optional[datetime]:
+    """Attach configured timezone if the model returned a naive datetime."""
+    if dt is not None and dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz_info)
+    return dt
+
+
 def register_tools(agent, tz: str, notify=None):
     calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
+    tz_info = ZoneInfo(tz)
     loop = asyncio.get_event_loop()
 
     def fire(msg: str):
@@ -111,6 +121,8 @@ def register_tools(agent, tz: str, notify=None):
         Set ignore_conflicts=True only when the user has explicitly acknowledged the conflict and
         wants to create the event anyway.
         """
+        start = _ensure_tz(start, tz_info)
+        end = _ensure_tz(end, tz_info)
         logger.info(
             "Tool called: create_calendar_event → %s | starts %s, ends %s%s",
             summary, _friendly_dt(start), _friendly_dt(end),
@@ -186,6 +198,8 @@ def register_tools(agent, tz: str, notify=None):
         Set ignore_conflicts=True only when the user has explicitly acknowledged the conflict and
         wants to reschedule anyway.
         """
+        start = _ensure_tz(start, tz_info)
+        end = _ensure_tz(end, tz_info)
         logger.info("Tool called: update_calendar_event → %s", event_id)
         try:
             service = get_service()
@@ -229,3 +243,77 @@ def register_tools(agent, tz: str, notify=None):
         except Exception as e:
             logger.error("delete_calendar_event failed: %s", e)
             raise ModelRetry(str(e))
+
+
+# --- Reminder loop ---
+
+def _load_notified(path: Path) -> dict[str, str]:
+    """Returns {event_id: iso_start_time}"""
+    if path.exists():
+        return json.loads(path.read_text())
+    return {}
+
+
+def _save_notified(path: Path, notified: dict[str, str]):
+    path.write_text(json.dumps(notified, indent=2))
+
+
+def _prune_notified(notified: dict) -> dict:
+    """Remove entries older than 24 hours (based on when the reminder was sent)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    return {
+        eid: entry for eid, entry in notified.items()
+        if datetime.fromisoformat(entry["notified_at"]) > cutoff
+    }
+
+
+async def reminder_loop(bot, chat_id: int, calendar_id: str, tz, config):
+    notified_path = Path(config.notified_file)
+    notified = _load_notified(notified_path)
+    service = get_service()
+
+    logger.info("Reminder loop started | calendar=%s, poll=%dmin, remind=%dmin ahead",
+                calendar_id, config.poll_interval_minutes, config.reminder_minutes)
+
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            window_end = now + timedelta(minutes=config.reminder_minutes)
+
+            events = service.events().list(
+                calendarId=calendar_id,
+                timeMin=now.isoformat(),
+                timeMax=window_end.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+            ).execute().get("items", [])
+
+            logger.debug("Reminder poll: %d events in next %d min, %d already notified",
+                         len(events), config.reminder_minutes, len(notified))
+
+            for event in events:
+                event_id = event["id"]
+                start_str = event["start"].get("dateTime") or event["start"].get("date")
+                prev = notified.get(event_id)
+                if prev and prev["start"] == start_str:
+                    continue
+                summary   = event.get("summary", "(No title)")
+                location  = event.get("location", "")
+                loc_line  = f"\n📍 {location}" if location else ""
+                start_dt  = datetime.fromisoformat(start_str).astimezone(tz)
+                time_str  = start_dt.strftime("%H:%M")
+                text = f"⏰ Reminder: *{summary}* starts at {time_str}{loc_line}"
+                await bot.send_message(chat_id, text, parse_mode="Markdown")
+                notified[event_id] = {
+                    "start": start_str,
+                    "notified_at": datetime.now(timezone.utc).isoformat(),
+                }
+                logger.info("Sent reminder for event %s (%s at %s)", event_id, summary, time_str)
+
+            notified = _prune_notified(notified)
+            _save_notified(notified_path, notified)
+
+        except Exception:
+            logger.exception("Error in reminder loop")
+
+        await asyncio.sleep(config.poll_interval_minutes * 60)

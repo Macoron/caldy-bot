@@ -75,6 +75,7 @@ class Assistant:
         return template.format(
             now=now.strftime("%Y-%m-%d %H:%M"),
             weekday=now.strftime("%A"),
+            timezone=self._config.timezone,
         )
 
     def _register_tools(self):
@@ -85,6 +86,11 @@ class Assistant:
         if HISTORY_FILE.exists():
             data = json.loads(HISTORY_FILE.read_text())
             history = ModelMessagesTypeAdapter.validate_python(data)
+            # Strip all system-prompt parts to avoid duplication across restarts
+            for m in history:
+                if isinstance(m, ModelRequest):
+                    m.parts = [p for p in m.parts if not isinstance(p, SystemPromptPart)]
+            history = [m for m in history if not (isinstance(m, ModelRequest) and not m.parts)]
             logger.info("Loaded %d messages from history", len(history))
             return [system_msg] + history
         return [system_msg]
