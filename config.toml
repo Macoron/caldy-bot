@@ -3,7 +3,7 @@ model = "claude-haiku-4-5"
 system_prompt = "prompt.md"
 timezone = "Europe/Berlin"
 history_window = 20
-compress_history = false
+compress_history = true
 
 [whisper]
 model = "whisper-1"
@@ -15,7 +15,7 @@ notified_file = "notified_events.json"
 
 [agenda]
 enabled = true
-send_time = "20:21"
+send_time = "08:00"
 
 [logging]
 level = "INFO"

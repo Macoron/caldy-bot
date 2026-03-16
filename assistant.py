@@ -12,6 +12,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
     TextPart,
     SystemPromptPart,
+    ToolReturnPart,
 )
 
 from config import AgentConfig
@@ -23,36 +24,37 @@ logger = logging.getLogger(__name__)
 HISTORY_FILE = Path("history.json")
 
 
+def _summarize_tool_content(content) -> str:
+    """Produce a compact summary of tool return content."""
+    if isinstance(content, list):
+        return f"[{len(content)} results returned]"
+    if isinstance(content, dict):
+        return "[1 result returned]"
+    if isinstance(content, str) and len(content) > 200:
+        return content[:200] + "..."
+    return str(content) if content is not None else "[no content]"
+
+
 def _compress_history(messages: list) -> list:
-    """Strip intermediate tool calls, keeping only user requests and final text responses."""
+    """Truncate tool return content while preserving tool call/return structure."""
     compressed = []
-    i = 0
-    while i < len(messages):
-        msg = messages[i]
-        is_user_turn = isinstance(msg, ModelRequest) and any(
-            isinstance(p, UserPromptPart) for p in msg.parts
-        )
-        if is_user_turn:
-            final_response = None
-            j = i + 1
-            while j < len(messages):
-                next_msg = messages[j]
-                is_next_user = isinstance(next_msg, ModelRequest) and any(
-                    isinstance(p, UserPromptPart) for p in next_msg.parts
-                )
-                if is_next_user:
-                    break
-                if isinstance(next_msg, ModelResponse) and any(
-                    isinstance(p, TextPart) for p in next_msg.parts
-                ):
-                    final_response = next_msg
-                j += 1
-            compressed.append(msg)
-            if final_response:
-                compressed.append(final_response)
-            i = j
+    for msg in messages:
+        if isinstance(msg, ModelRequest) and any(
+            isinstance(p, ToolReturnPart) for p in msg.parts
+        ):
+            new_parts = []
+            for p in msg.parts:
+                if isinstance(p, ToolReturnPart):
+                    p = ToolReturnPart(
+                        tool_name=p.tool_name,
+                        content=_summarize_tool_content(p.content),
+                        tool_call_id=p.tool_call_id,
+                        timestamp=p.timestamp,
+                    )
+                new_parts.append(p)
+            compressed.append(ModelRequest(parts=new_parts))
         else:
-            i += 1
+            compressed.append(msg)
     return compressed
 
 
