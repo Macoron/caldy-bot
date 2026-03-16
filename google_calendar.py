@@ -39,7 +39,7 @@ def _check_conflicts(service, calendar_id: str, start: datetime, end: datetime,
     conflicts = [
         f"{e.get('summary', '(no title)')} ({_friendly_event_time(e['start'])} – {_friendly_event_time(e['end'])})"
         for e in result.get("items", [])
-        if e["id"] != exclude_event_id
+        if e["id"] != exclude_event_id and "dateTime" in e["start"]
     ]
     if conflicts:
         raise CalendarConflictError(conflicts)
