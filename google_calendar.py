@@ -150,10 +150,11 @@ def register_tools(agent, tz: str, notify=None):
             raise ModelRetry(str(e))
 
     @agent.tool_plain
-    def list_upcoming_events(days_ahead: int = 7) -> list[CalendarEvent]:
+    def list_upcoming_events(days_ahead: int = 1) -> list[CalendarEvent]:
         """List upcoming events from Google Calendar. Returns event IDs which are required for update and delete operations.
         Recurring events appear once with their recurrence rule (e.g. 'RRULE:FREQ=WEEKLY;BYDAY=MO').
-        Use days_ahead to control the time window: 1 for today, 2 for today+tomorrow, 7 for this week, etc."""
+        Use days_ahead to control the time window: 1 for today, 2 for today+tomorrow, 7 for this week, etc.
+        Default is 1 (today only)."""
         logger.info("Tool called: list_upcoming_events | days_ahead=%d", days_ahead)
         try:
             service = get_service()

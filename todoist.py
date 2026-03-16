@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 from pydantic_ai import ModelRetry
@@ -101,18 +101,35 @@ def register_tools(agent, tz: str, notify=None):
             raise ModelRetry(str(e))
 
     @agent.tool_plain
-    def list_todoist_tasks(project_name: Optional[str] = None) -> list[dict]:
-        """List active (uncompleted) Todoist tasks. Optionally filter by project name.
-        Returns task IDs which are required for update, close, and delete operations."""
-        logger.info("Tool called: list_todoist_tasks | project=%s", project_name)
+    def list_todoist_tasks(
+        project_name: Optional[str] = None,
+        days_ahead: int = 1,
+        check_backlog: bool = False,
+    ) -> list[dict]:
+        """List active (uncompleted) Todoist tasks. Returns task IDs which are required for update, close, and delete operations.
+
+        By default returns tasks due today (including overdue).
+        Use days_ahead to control the time window: 1 for today, 7 for this week, etc.
+        Set check_backlog=True to also include tasks with no due date."""
+        logger.info("Tool called: list_todoist_tasks | project=%s, days_ahead=%d, check_backlog=%s", project_name, days_ahead, check_backlog)
         try:
             kwargs = {}
             if project_name:
                 kwargs["project_id"] = _resolve_project(project_name)
             tasks = _get_all_tasks(**kwargs)
+            today = date.today()
+            window_end = today + timedelta(days=days_ahead)
+            filtered = []
+            for t in tasks:
+                if t.due:
+                    due = t.due.date if isinstance(t.due.date, date) else date.fromisoformat(t.due.date)
+                    if due <= window_end:
+                        filtered.append(t)
+                elif check_backlog:
+                    filtered.append(t)
             project_map = _build_project_map()
             section_map = _build_section_map()
-            return [_task_to_dict(t, project_map, section_map) for t in tasks]
+            return [_task_to_dict(t, project_map, section_map) for t in filtered]
         except Exception as e:
             logger.error("list_todoist_tasks failed: %s", e)
             raise ModelRetry(str(e))
