@@ -8,9 +8,7 @@ from pydantic_ai import Agent
 from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     ModelRequest,
-    ModelResponse,
     UserPromptPart,
-    TextPart,
     SystemPromptPart,
     ToolReturnPart,
 )
@@ -62,23 +60,18 @@ class Assistant:
     def __init__(self, config: AgentConfig, notify=None):
         self._config = config
         self._notify = notify
-        self._system_prompt = self._render_prompt(config.system_prompt)
+        self._system_prompt = self._load_prompt(config.system_prompt)
         self._history: list = self._load_history()
 
         logger.info("Initializing agent | model=%s", config.model)
         self._agent = Agent(config.model)
         self._register_tools()
 
-    def _render_prompt(self, template: str) -> str:
-        if template.endswith(".md"):
-            template = Path(template).read_text()
-        tz = ZoneInfo(self._config.timezone)
-        now = datetime.now(tz)
-        return template.format(
-            now=now.strftime("%Y-%m-%d %H:%M"),
-            weekday=now.strftime("%A"),
-            timezone=self._config.timezone,
-        )
+    @staticmethod
+    def _load_prompt(source: str) -> str:
+        if source.endswith(".md"):
+            return Path(source).read_text()
+        return source
 
     def _register_tools(self):
         google_calendar.register_tools(self._agent, self._config.timezone, self._notify)
@@ -112,6 +105,9 @@ class Assistant:
         HISTORY_FILE.write_text(json.dumps(data, indent=2))
 
     async def chat(self, text: str) -> str:
+        tz = ZoneInfo(self._config.timezone)
+        now = datetime.now(tz)
+        text = f"[{now.strftime('%A, %Y-%m-%d %H:%M')} {self._config.timezone}] {text}"
         result = await self._agent.run(text, message_history=self._history)
         self._history = result.all_messages()
         self._save_history()
