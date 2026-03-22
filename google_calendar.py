@@ -9,6 +9,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 from pydantic_ai import ModelRetry
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -17,6 +18,59 @@ from googleapiclient.discovery import build
 from utils import _friendly_dt, _friendly_rrule, _friendly_event_time
 
 logger = logging.getLogger(__name__)
+
+# --- Telegram-based reauth ---
+
+_reauth_send_url: Optional[callable] = None  # async callback(url) to send auth URL to user
+_reauth_future: Optional[asyncio.Future] = None
+_reauth_lock = asyncio.Lock()
+
+
+def set_reauth_callback(send_url_callback):
+    """Set the async callback used to send the auth URL to the user (e.g. via Telegram)."""
+    global _reauth_send_url
+    _reauth_send_url = send_url_callback
+
+
+async def submit_reauth_code(code: str):
+    """Called when the user replies with the authorization code."""
+    global _reauth_future
+    if _reauth_future and not _reauth_future.done():
+        _reauth_future.set_result(code)
+
+
+async def _reauth_via_telegram() -> Credentials:
+    """Run the OAuth flow interactively through Telegram."""
+    global _reauth_future
+    async with _reauth_lock:
+        # Check if token was already refreshed by another concurrent caller
+        if TOKEN_FILE.exists():
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+            if creds and creds.valid:
+                return creds
+
+        flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+        flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
+        auth_url, _ = flow.authorization_url(prompt="consent")
+
+        loop = asyncio.get_event_loop()
+        _reauth_future = loop.create_future()
+
+        if _reauth_send_url:
+            await _reauth_send_url(auth_url)
+        else:
+            logger.error("No reauth callback set — cannot request code from user")
+            raise RuntimeError("Google token expired and no reauth callback configured")
+
+        logger.info("Waiting for user to submit reauth code via Telegram...")
+        code = await asyncio.wait_for(_reauth_future, timeout=300)
+        _reauth_future = None
+
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+        TOKEN_FILE.write_text(creds.to_json())
+        logger.info("Reauth complete — token saved")
+        return creds
 
 
 class CalendarConflictError(Exception):
@@ -65,23 +119,36 @@ CREDENTIALS_FILE = Path(".google_secrets/credentials.json")
 TOKEN_FILE = Path(".google_secrets/token.json")
 
 
+class ReauthRequired(Exception):
+    """Raised when token refresh fails and interactive reauth is needed."""
+    pass
+
+
 def get_service():
     creds = None
     if TOKEN_FILE.exists():
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except RefreshError:
+                logger.warning("Refresh token expired or revoked — reauth required")
+                TOKEN_FILE.unlink(missing_ok=True)
+                raise ReauthRequired()
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
-            auth_url, _ = flow.authorization_url(prompt="consent")
-            print(f"\nOpen this URL in your browser:\n{auth_url}\n")
-            code = input("Paste the authorization code here: ").strip()
-            flow.fetch_token(code=code)
-            creds = flow.credentials
+            raise ReauthRequired()
         TOKEN_FILE.write_text(creds.to_json())
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+
+async def get_service_with_reauth():
+    """Get a Calendar service, triggering Telegram-based reauth if needed."""
+    try:
+        return get_service()
+    except ReauthRequired:
+        creds = await _reauth_via_telegram()
+        return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
 
 def _ensure_tz(dt: Optional[datetime], tz_info) -> Optional[datetime]:
@@ -99,6 +166,15 @@ def register_tools(agent, tz: str, notify=None):
     def fire(msg: str):
         if notify:
             asyncio.run_coroutine_threadsafe(notify(msg), loop)
+
+    def _service():
+        """Get calendar service, with async reauth fallback via the event loop."""
+        try:
+            return get_service()
+        except ReauthRequired:
+            future = asyncio.run_coroutine_threadsafe(_reauth_via_telegram(), loop)
+            creds = future.result(timeout=310)
+            return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
     @agent.tool_plain
     def create_calendar_event(
@@ -130,7 +206,7 @@ def register_tools(agent, tz: str, notify=None):
             f" | recurrence: {recurrence}" if recurrence else "",
         )
         try:
-            service = get_service()
+            service = _service()
             _check_conflicts(service, calendar_id, start, end, ignore=ignore_conflicts)
             body = {
                 "summary": summary,
@@ -157,7 +233,7 @@ def register_tools(agent, tz: str, notify=None):
         Default is 1 (today only)."""
         logger.info("Tool called: list_upcoming_events | days_ahead=%d", days_ahead)
         try:
-            service = get_service()
+            service = _service()
             now = datetime.now(timezone.utc)
             window_end = now + timedelta(days=days_ahead)
             result = service.events().list(
@@ -208,7 +284,7 @@ def register_tools(agent, tz: str, notify=None):
         end = _ensure_tz(end, tz_info)
         logger.info("Tool called: update_calendar_event → %s", event_id)
         try:
-            service = get_service()
+            service = _service()
             event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
             if start and end:
                 _check_conflicts(service, calendar_id, start, end, ignore=ignore_conflicts, exclude_event_id=event_id)
@@ -237,7 +313,7 @@ def register_tools(agent, tz: str, notify=None):
         """Delete a Google Calendar event by its ID."""
         logger.info("Tool called: delete_calendar_event → %s", event_id)
         try:
-            service = get_service()
+            service = _service()
             event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
             summary = event.get("summary", event_id)
             start_str = _friendly_event_time(event["start"])
@@ -285,7 +361,7 @@ async def reminder_loop(bot, chat_id: int, calendar_id: str, tz, config):
             now = datetime.now(timezone.utc)
             window_end = now + timedelta(minutes=config.reminder_minutes)
 
-            service = get_service()
+            service = await get_service_with_reauth()
             events = service.events().list(
                 calendarId=calendar_id,
                 timeMin=now.isoformat(),

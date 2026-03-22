@@ -13,7 +13,8 @@ from aiogram.filters import Command
 
 from config import config
 from assistant import HISTORY_FILE, Assistant
-from google_calendar import reminder_loop
+import google_calendar
+from google_calendar import reminder_loop, set_reauth_callback, submit_reauth_code
 from daily_agenda import agenda_loop
 
 
@@ -89,6 +90,13 @@ async def handle_clear(message: Message):
 
 @dp.message()
 async def handle_message(message: Message):
+    # If a reauth flow is waiting for a code, intercept the message
+    if message.text and google_calendar._reauth_future and not google_calendar._reauth_future.done():
+        code = message.text.strip()
+        await submit_reauth_code(code)
+        await message.answer("Got it — re-authenticating with Google...")
+        return
+
     if message.voice:
         async with typing_indicator(message.chat.id):
             text = await transcribe_voice(message)
@@ -114,6 +122,13 @@ async def main():
         BotCommand(command="clear", description="Clear conversation history"),
     ])
     chat_id = int(os.environ["TELEGRAM_ALLOWED_CHAT_ID"])
+
+    async def send_reauth_url(url: str):
+        await bot.send_message(
+            chat_id, f"🔑 Google token expired. Please re-authenticate:\n\n{url}\n\nPaste the authorization code here.",
+        )
+
+    set_reauth_callback(send_reauth_url)
     asyncio.create_task(
         reminder_loop(bot, chat_id,
                       os.environ["GOOGLE_CALENDAR_ID"], config.tz, config.reminders)
