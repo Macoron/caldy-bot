@@ -1,15 +1,45 @@
 import asyncio
 import logging
 import os
+import time
 from datetime import date, timedelta
 from typing import Optional
 
 from pydantic_ai import ModelRetry
+from requests import HTTPError
 from todoist_api_python.api import TodoistAPI
 
 from utils import _friendly_date
 
 logger = logging.getLogger(__name__)
+
+_RETRY_STATUSES = {502, 503, 504}
+_RETRY_ATTEMPTS = 3
+_RETRY_DELAY = 2.0  # seconds between attempts
+
+
+def _with_retry(fn, *args, **kwargs):
+    """Call fn(*args, **kwargs) retrying on transient HTTP errors or timeouts."""
+    last_exc = None
+    for attempt in range(1, _RETRY_ATTEMPTS + 1):
+        try:
+            return fn(*args, **kwargs)
+        except HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status in _RETRY_STATUSES and attempt < _RETRY_ATTEMPTS:
+                logger.warning("Todoist %s (attempt %d/%d), retrying in %.1fs…", status, attempt, _RETRY_ATTEMPTS, _RETRY_DELAY)
+                time.sleep(_RETRY_DELAY)
+                last_exc = e
+            else:
+                raise
+        except (ConnectionError, TimeoutError, OSError) as e:
+            if attempt < _RETRY_ATTEMPTS:
+                logger.warning("Todoist transient error: %s (attempt %d/%d), retrying in %.1fs…", e, attempt, _RETRY_ATTEMPTS, _RETRY_DELAY)
+                time.sleep(_RETRY_DELAY)
+                last_exc = e
+            else:
+                raise
+    raise last_exc
 
 
 def register_tools(agent, tz: str, notify=None):
@@ -22,20 +52,20 @@ def register_tools(agent, tz: str, notify=None):
 
     def _get_all_projects() -> list:
         results = []
-        for page in api.get_projects():
+        for page in _with_retry(api.get_projects):
             results.extend(page)
         return results
 
     def _get_all_sections(project_id: str | None = None) -> list:
         results = []
         kwargs = {"project_id": project_id} if project_id else {}
-        for page in api.get_sections(**kwargs):
+        for page in _with_retry(api.get_sections, **kwargs):
             results.extend(page)
         return results
 
     def _get_all_tasks(**kwargs) -> list:
         results = []
-        for page in api.get_tasks(**kwargs):
+        for page in _with_retry(api.get_tasks, **kwargs):
             results.extend(page)
         return results
 
@@ -159,7 +189,7 @@ def register_tools(agent, tz: str, notify=None):
                 kwargs["section_id"] = _resolve_section(section_name, project_id)
             if due_date:
                 kwargs["due_date"] = date.fromisoformat(due_date)
-            task = api.add_task(**kwargs)
+            task = _with_retry(api.add_task, **kwargs)
             project_map = _build_project_map()
             section_map = _build_section_map(project_id)
             date_str = f", due {_friendly_date(date.fromisoformat(due_date))}" if due_date else ""
@@ -190,7 +220,7 @@ def register_tools(agent, tz: str, notify=None):
                     kwargs["due_string"] = "no date"
                 else:
                     kwargs["due_date"] = date.fromisoformat(due_date)
-            task = api.update_task(task_id, **kwargs)
+            task = _with_retry(api.update_task, task_id, **kwargs)
             project_map = _build_project_map()
             section_map = _build_section_map()
             date_str = f", due {_friendly_date(task.due.date)}" if task.due else ""
@@ -205,8 +235,8 @@ def register_tools(agent, tz: str, notify=None):
         """Mark a Todoist task as completed."""
         logger.info("Tool called: close_todoist_task → %s", task_id)
         try:
-            task = api.get_task(task_id)
-            api.complete_task(task_id)
+            task = _with_retry(api.get_task, task_id)
+            _with_retry(api.complete_task, task_id)
             fire(f"✅ Task completed: {task.content}")
             return f"Task '{task.content}' completed."
         except Exception as e:
@@ -218,8 +248,8 @@ def register_tools(agent, tz: str, notify=None):
         """Permanently delete a Todoist task. Use close_todoist_task to complete a task instead."""
         logger.info("Tool called: delete_todoist_task → %s", task_id)
         try:
-            task = api.get_task(task_id)
-            api.delete_task(task_id)
+            task = _with_retry(api.get_task, task_id)
+            _with_retry(api.delete_task, task_id)
             fire(f"🗑 Task deleted: {task.content}")
             return f"Task '{task.content}' deleted."
         except Exception as e:
