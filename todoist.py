@@ -44,7 +44,10 @@ def _with_retry(fn, *args, **kwargs):
 
 def register_tools(agent, tz: str, notify=None):
     api = TodoistAPI(os.environ["TODOIST_API_TOKEN"])
-    loop = asyncio.get_event_loop()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
 
     def fire(msg: str):
         if notify:

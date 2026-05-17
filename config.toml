@@ -1,7 +1,7 @@
 [agent]
-model = "claude-haiku-4-5"
+model = "openai:gpt-4o"
 system_prompt = "prompt.md"
-timezone = "Europe/Berlin"
+timezone = "Europe/Moscow"
 history_window = 20
 compress_history = true
 
