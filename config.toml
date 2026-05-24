@@ -1,7 +1,7 @@
 [agent]
-model = "openai:gpt-4o"
+model = "anthropic:claude-haiku-4-5"
 system_prompt = "prompt.md"
-timezone = "Europe/Moscow"
+timezone = "Europe/Berlin"
 history_window = 20
 compress_history = true
 
@@ -15,7 +15,7 @@ notified_file = "notified_events.json"
 
 [agenda]
 enabled = true
-send_time = "08:00"
+send_time = "08:15"
 
 [logging]
 level = "INFO"

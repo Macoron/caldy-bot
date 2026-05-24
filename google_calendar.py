@@ -12,6 +12,7 @@ from pydantic_ai import ModelRetry
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
@@ -125,6 +126,15 @@ class ReauthRequired(Exception):
 
 
 def get_service():
+    # Try Service Account first (no token refresh needed)
+    if CREDENTIALS_FILE.exists():
+        creds = ServiceAccountCredentials.from_service_account_file(
+            CREDENTIALS_FILE, scopes=SCOPES)
+        if creds:
+            logger.info("Using Service Account credentials")
+            return build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+    # Fall back to user OAuth token
     creds = None
     if TOKEN_FILE.exists():
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
@@ -243,6 +253,8 @@ def register_tools(agent, tz: str, notify=None):
                 singleEvents=False,
             ).execute()
             events = result.get("items", [])
+            # Filter out canceled/deleted events without start time
+            events = [e for e in events if "start" in e]
             events.sort(key=lambda e: e["start"].get("dateTime", e["start"].get("date", "")))
             return [
                 CalendarEvent(
